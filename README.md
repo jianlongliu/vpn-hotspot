@@ -1,62 +1,74 @@
 # vpn-hotspot
 
-把系统 `mihomo` 的代理出口共享成一个 2.4GHz WiFi 热点（`ap0`），手表、手机连上就能走代理。
+把本机 [mihomo](https://github.com/MetaCubeX/mihomo) 的代理出口共享成一个 WiFi 热点（`ap0`），让手表、手机这类不方便单独配代理的设备连上就能用。
 
-## 要求
+- 只开 2.4GHz：本机网卡（Intel AX201）在自管管制域下起不了 5GHz AP，原因见 [docs/why-2.4ghz.md](docs/why-2.4ghz.md)
+- 客户端零配置：DHCP 与 DNS 都指向热点网关，出口是 mihomo 的 TUN，走代理是透明的
+- 所有改动都是运行时的（`ap0` 接口、iptables、firewalld runtime 区、两个 sysctl），停止即撤，不写 `/etc`
 
-- Arch 系，装了 `hostapd`、`dnsmasq`、`iwd`、`iptables`、`firewalld`
-- **`mihomo` 已在跑** —— 热点出口就是它的 TUN 接口
-- **用 `pkexec` 提权**（不是 `sudo`）
-- 接口名与网段写死在脚本里：STA `wlan0`、AP `ap0`、出口 `mihomo`、网段 `10.42.0.0/24`（网关 `10.42.0.1`）
-- SSID 与密码来自 `~/.local/state/vpn-hotspot/hotspot.env`（脚本里没有密码）
+## 安装
+
+```bash
+# 依赖（Arch 系；本机已随系统装好）
+sudo pacman -S hostapd dnsmasq iwd iw iptables firewalld
+
+# 本仓库
+git clone https://github.com/jianlongliu/vpn-hotspot.git
+cd vpn-hotspot
+```
+
+另需系统级 `mihomo` 在跑（热点出口就是它的 TUN 接口）。其余命令（`ip`、`sysctl`、`pkill`、`curl`、`systemctl`）来自 Arch 基础包。脚本按自身路径找配置文件，仓库放哪都行；所有操作都用 `pkexec` 提权。
+
+## 配置
+
+| 项 | 位置 | 说明 |
+|---|---|---|
+| SSID / 密码 | `~/.local/state/vpn-hotspot/hotspot.env` | `HOTSPOT_SSID=…`、`HOTSPOT_PSK=…`（≥8 位），`chmod 600`；脚本里不含密码 |
+| 接口名 / 网段 | `run.sh` 顶部变量 | `WLAN_IFACE=wlan0`、`AP_IFACE=ap0`、`VPN_IFACE=mihomo`、`SUBNET=10.42.0.0/24`、`GW=10.42.0.1/24` |
+| DHCP / DNS | `dnsmasq.conf` | 地址池 `10.42.0.2–254`，网关与 DNS 都是 `10.42.0.1`，上游 DNS `198.18.0.2`（mihomo 的 fake-ip，靠 TUN 劫持） |
+| 加密 | 运行时生成 | `run.sh start` 按 STA 当前信道生成 `~/.local/state/vpn-hotspot/hostapd.conf`（WPA2-PSK）；模板见 `hostapd.conf.example` |
+
+首次使用前写一次凭据：
+
+```bash
+mkdir -p ~/.local/state/vpn-hotspot
+printf 'HOTSPOT_SSID="%s"\nHOTSPOT_PSK="%s"\n' "SSID" "密码" > ~/.local/state/vpn-hotspot/hotspot.env
+chmod 600 ~/.local/state/vpn-hotspot/hotspot.env
+```
 
 ## 用法
 
 ```bash
-# 一次性：写凭据（值带引号，SSID 含空格也不会被拆断）
-mkdir -p ~/.local/state/vpn-hotspot
-printf 'HOTSPOT_SSID="%s"\nHOTSPOT_PSK="%s"\n' "SSID" "密码" > ~/.local/state/vpn-hotspot/hotspot.env
-chmod 600 ~/.local/state/vpn-hotspot/hotspot.env
+pkexec bash iwd-2g.sh 2g       # 把 STA 钉到 2.4GHz（会重启 iwd，短暂断网）
+pkexec bash run.sh start       # 开热点
+pkexec bash run.sh status      # 现场：接口 / 进程 / 租约 / NAT / 转发 / 防火墙 / 频段
+pkexec bash selftest.sh        # 端到端自检（可选）
 
-# 开
-pkexec bash iwd-2g.sh 2g      # STA 钉到 2.4GHz（会重启 iwd，短暂断网）
-pkexec bash run.sh start      # 开热点
-pkexec bash run.sh status     # 看现场：接口 / 进程 / 租约 / NAT / 转发 / 防火墙 / 频段
-pkexec bash selftest.sh       # 端到端自检（可选）
-
-# 关
-pkexec bash run.sh stop
-pkexec bash iwd-2g.sh restore # 把 5GHz 放回来 —— 别忘这一步
+pkexec bash run.sh stop        # 关热点
+pkexec bash iwd-2g.sh restore  # 还原 iwd，5GHz 回到可用
 ```
 
-`run.sh start` 遇到下面这些会当场退出，不半拉起：`mihomo` 没跑、缺凭据（或密码短于 8 位）、`ap0` 已存在、STA 还落在 5GHz（会提示先跑 `iwd-2g.sh 2g`）。
+`run.sh start` 在下列情况会直接退出、不做任何改动：`mihomo` 未运行、凭据缺失或密码短于 8 位、`ap0` 已存在、STA 仍落在 5GHz（会提示先跑 `iwd-2g.sh 2g`）。
 
-## 为什么非得先降到 2.4GHz
+钉频原因、验证方法与排障见 [docs/](docs/)。
 
-本机网卡是 Intel AX201（`iwlwifi`），两条硬件限制叠在一起，结果只剩 2.4GHz 这一条路：
+## 卸载 / 移除
 
-- **AP 侧用不了 5GHz**：网卡是自管管制域（`iw phy phy0 info` 标 `self-managed`），5GHz 的 149–165 全带 `no IR`，hostapd 直接以 `NO-IR ... not allowed for AP mode` 拒绝。`iw reg set CN` 与 hostapd 的 `country_code=CN` 都改不动自管域。
-- **AP 必须与 STA 同信道**：驱动的接口组合是 `#{managed}<=1, #{AP}<=1, #channels<=1`，STA 在 5GHz 时建 2.4GHz AP 会 `-EBUSY`。
+```bash
+pkexec bash run.sh stop                     # 1. 关热点（撤 iptables、删 ap0、摘 trusted 区）
+pkexec bash iwd-2g.sh restore               # 2. 还原 iwd（若没用过 2g，可跳过）
+rm -rf ~/.local/state/vpn-hotspot           # 3. 删运行时状态与凭据
+rm -rf ~/.local/state/backups/etc/iwd       # 4. 可选：删 iwd 备份
+cd .. && rm -rf vpn-hotspot                 # 5. 删仓库
+```
 
-所以先把 STA 钉到 2.4GHz，AP 才能在同一条 2.4GHz 信道上起来。
+`ap0`、iptables 与 firewalld 的改动都只存在于运行时，重启即净；系统服务 `hostapd`、`dnsmasq` 全程没被启用，无需处理。
 
-⚠ **「5GHz 用不了」只限 AP 这一侧**：AX201 作为 STA 连 5GHz 完全正常。钉频用的 `BandModifier5GHz=0.0` 副作用比"降权"狠得多 —— 因子为 0 时 iwd 的周期性扫描根本不把 5GHz 放进扫描频点集，表现成「同名双频永远只连 2.4G、`iwctl station wlan0 scan` 里 0 个 5GHz SSID」。因此它只当临时开关用：用完 `restore`，`run.sh status` 末段会检查有没有忘记还原。
+## 文档
 
-## 验证
+- [docs/why-2.4ghz.md](docs/why-2.4ghz.md) —— 为什么必须先降 2.4GHz、`BandModifier5GHz` 的坑与症状辨识
+- [docs/operations.md](docs/operations.md) —— 状态文件与备份、验证清单、故障排查与回退细节、使用注意
 
-- **现场**：`run.sh status` 里 hostapd 有进程、`ap0` 有 `10.42.0.1/24`、NAT 段出现 MASQUERADE、`ip_forward=1`、trusted 区含 `ap0`；`journalctl -t hostapd` 里出现 `AP-ENABLED`。
-- **端到端**：`selftest.sh` 里假客户端能解析域名、打到 gstatic `204` 与 google `200`，并在 mihomo 面板（`127.0.0.1:9090`）里看到它的连接。
-- **真机**：手表/手机连上后 `/var/lib/misc/dnsmasq.leases` 里出现租约。
-- **频段**：`iwd-2g.sh` 每次跑完自己会打 iwd 状态、`wlan0` 的 ssid/channel 与 5GHz BSS 计数（钉住时应为 `0 个`）。
+## 致谢
 
-## 文件
-
-| 文件 | 作用 |
-|---|---|
-| `run.sh` | `start` / `stop` / `status`：建 `ap0`、起 hostapd 与 dnsmasq、配 NAT 与转发 |
-| `iwd-2g.sh` | `2g` / `restore`：把 iwd 临时钉在 2.4GHz，以及还原 |
-| `selftest.sh` | 用 netns + veth 冒充客户端跑端到端自检 |
-| `dnsmasq.conf` | DHCP/DNS：`interface=ap0`、`server=198.18.0.2`（mihomo 的 fake-ip，靠 TUN 劫持） |
-| `hostapd.conf.example` | `run.sh start` 生成的配置样例（真值含密码，运行时落在 `~/.local/state/vpn-hotspot/`） |
-
-运维向的东西（状态文件、备份、回退、拆除）在 [`NOTES.md`](NOTES.md)。
+本仓库没有引入第三方代码，功能全部建立在这些上游项目上：[mihomo](https://github.com/MetaCubeX/mihomo)、[hostapd](https://w1.fi/hostapd/)、[dnsmasq](https://thekelleys.org.uk/dnsmasq/doc.html)、[iwd](https://iwd.wiki.kernel.org/)、[iptables](https://www.netfilter.org/projects/iptables/)、[firewalld](https://firewalld.org/)。
