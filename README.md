@@ -18,9 +18,11 @@
 
 ## 为什么必须先把 STA 钉到 2.4GHz
 
-1. 本机网卡是 Intel **自管管制域**（`iw phy phy0 info` 里标 `self-managed`，国家恒为 `00`）：5GHz 的 149–165 全是 `no IR`，hostapd 直接以 `NO-IR ... not allowed for AP mode` 拒绝 ⇒ **AP 起不来 5GHz**。`iw reg set CN` 与 hostapd 的 `country_code=CN` 都改不动自管域。
+1. 本机网卡是 **Intel Wi-Fi 6 AX201**（`lspci` = `8086:a0f0` rev 20，驱动 `iwlwifi`），而且是 **自管管制域**（`iw phy phy0 info` 里标 `self-managed`，国家恒为 `00`）：5GHz 的 149–165 全是 `no IR`，hostapd 直接以 `NO-IR ... not allowed for AP mode` 拒绝 ⇒ **AP 起不来 5GHz**。`iw reg set CN` 与 hostapd 的 `country_code=CN` 都改不动自管域。
 2. 驱动的接口组合是 `#{managed}<=1, #{AP}<=1, #channels<=1` ⇒ **AP 必须与 STA 同信道**。STA 在 5GHz 时建 2.4GHz AP 会 `-EBUSY`。
 3. 两条合起来只剩一条路：把 STA 先钉到 2.4GHz（`iwd-2g.sh 2g`），AP 才能在同一个 2.4GHz 信道上起来。
+
+⇒ **「5GHz 不能用」只限定在 AP 这一侧**：AX201 作为 STA 连 5GHz 完全正常（本机日常就落在 5300 MHz / ch60、rx 2400 Mbit/s 档），**别为此把 5GHz 屏蔽掉**——那既没必要，又会顺带废掉 STA 侧的 5GHz（`BandModifier5GHz` 就是反例，见下）。开热点期间把 STA 钉到 2.4GHz 只是"临时代价"，用完 `restore` 就还。
 
 **`BandModifier5GHz=0.0` 的副作用比"降权"严重得多**：因子为 0 时 iwd 的周期性扫描根本不把 5GHz 放进扫描频点集（iwd 3.12 `scan_periodic_get_freqs()` 按因子拼 band mask），于是同名双频 SSID 永远只连 2.4G，而且**扫描列表里一个 5GHz SSID 都不出现**（`iwctl station wlan0 scan` 也一样）。2026-09-24 那次漏跑 `restore`，一直挂到 2026-10-14 才被当成"连不上 5G"发现。`run.sh status` 末尾会检查这一条，钉住未还原时会打警告。
 
