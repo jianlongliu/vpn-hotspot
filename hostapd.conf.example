@@ -1,0 +1,17 @@
+# `run.sh start` 生成的 hostapd 配置长这样（真值在机器上的 ~/.local/state/vpn-hotspot/hostapd.conf，
+# 密码不写死进脚本也不入库）。此处 channel / hw_mode 由 run.sh 按 STA 当前信道填：
+# 2.4GHz 用 hw_mode=g，5GHz 用 hw_mode=a —— 但本机网卡是自管管制域，5GHz AP 起不来，见 README。
+interface=ap0
+driver=nl80211
+ssid=<SSID>
+hw_mode=g
+channel=6
+ieee80211n=1
+wmm_enabled=1
+macaddr_acl=0
+auth_algs=1
+ignore_broadcast_ssid=0
+wpa=2
+wpa_passphrase=<密码，≥8 位>
+wpa_key_mgmt=WPA-PSK
+rsn_pairwise=CCMP

@@ -1,0 +1,5 @@
+# 运行时凭据与状态绝不入库：真值都在 ~/.local/state/vpn-hotspot/
+hostapd.conf
+*.env
+*.pid
+*.bak*
