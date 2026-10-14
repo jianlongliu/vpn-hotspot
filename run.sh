@@ -73,6 +73,7 @@ EOF
 
 start() {
   load_credentials
+  mkdir -p -- "$STATE_DIR"
   if [[ -e /sys/class/net/$AP_IFACE ]]; then
     die "$AP_IFACE 已存在，先 stop"
   fi

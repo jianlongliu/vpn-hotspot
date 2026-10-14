@@ -10,6 +10,7 @@ CALLER_HOME=$(getent passwd "$CALLER_UID" | cut -d: -f6)
 STATE_DIR=${HOTSPOT_STATE_DIR:-$CALLER_HOME/.local/state/vpn-hotspot}
 
 NS=ht-t2
+mkdir -p -- "$STATE_DIR"
 HOSTV=10.42.0.251
 CLIENT=10.42.0.98
 DNS_CONF=$SCRIPT_DIR/dnsmasq.conf
